@@ -47249,11 +47249,31 @@ self.onmessage = function (e) {
       return contentLength;
     };
     const fetchRange = async (url, start, end) => {
-      const response = await fetch(`${url}`, {
-        headers: { Range: `bytes=${start}-${end}` }
-      });
-      const arrayBuffer = await response.arrayBuffer();
-      return new Uint8Array(arrayBuffer);
+      try {
+        const response = await fetch(`${url}`, {
+          headers: { Range: `bytes=${start}-${end}` }
+        });
+        // If the server returned a full 200 with the whole file, still handle it by
+        // slicing out the requested range from the returned bytes.
+        const arrayBuffer = await response.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuffer);
+        if (response.status === 200) {
+          return uint8.subarray(start, end + 1);
+        }
+        // For 206 Partial Content or other success responses, return the body as-is
+        return new Uint8Array(arrayBuffer);
+      } catch (err) {
+        // Common failure: CORS preflight blocked Range header. Fallback to fetching
+        // the entire file without Range and slice the requested bytes locally.
+        try {
+          const fullResp = await fetch(`${url}`);
+          const fullBuf = await fullResp.arrayBuffer();
+          const fullUint8 = new Uint8Array(fullBuf);
+          return fullUint8.subarray(start, end + 1);
+        } catch (err2) {
+          throw new Error(`Failed to fetch range ${start}-${end} from ${url}: ${err2.message}`);
+        }
+      }
     };
     const decompressAsync = async (data, opts) => {
       return new Promise((resolve, reject) => {
