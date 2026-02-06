@@ -47170,14 +47170,35 @@ self.onmessage = function (e) {
     }
     const openRemoteZipFile = async (url, fetchContentLength = fetchSize, fetchBytes = fetchRange) => {
       const contentLength = await fetchContentLength(url);
-      const eocdrBuffer = await fetchBytes(
-        url,
-        contentLength - 22,
-        contentLength - 1
-      );
-      const eocdrView = new DataView(eocdrBuffer.buffer);
-      const centralDirOffset = eocdrView.getUint32(16, true);
+      // The EOCDR (End of central directory record) can include a variable-length
+      // comment, so it may not be located exactly 22 bytes from the end. Fetch a
+      // larger tail (up to 65557 bytes per ZIP spec) and search backwards for the
+      // EOCDR signature (0x06054b50). This is more robust when files include
+      // comments or other trailing data.
+      const MAX_EOCDR_SEARCH = 65557; // 0xFFFF + 22
+      const tailSize = Math.min(contentLength, MAX_EOCDR_SEARCH);
+      const tailStart = contentLength - tailSize;
+      const eocdrBuffer = await fetchBytes(url, tailStart, contentLength - 1);
+      const eocdrViewBuffer = eocdrBuffer.buffer;
+      let eocdrIndex = -1;
+      // EOCDR signature bytes (little-endian): 0x50 0x4b 0x05 0x06
+      for (let i = eocdrBuffer.length - 22; i >= 0; --i) {
+        if (
+          eocdrBuffer[i] === 0x50 &&
+          eocdrBuffer[i + 1] === 0x4b &&
+          eocdrBuffer[i + 2] === 0x05 &&
+          eocdrBuffer[i + 3] === 0x06
+        ) {
+          eocdrIndex = i;
+          break;
+        }
+      }
+      if (eocdrIndex === -1) {
+        throw new Error("Unable to find end of central directory record in remote ZIP");
+      }
+      const eocdrView = new DataView(eocdrViewBuffer, eocdrBuffer.byteOffset + eocdrIndex);
       const centralDirSize = eocdrView.getUint32(12, true);
+      const centralDirOffset = eocdrView.getUint32(16, true);
       const centralDirBuffer = await fetchBytes(
         url,
         centralDirOffset,
