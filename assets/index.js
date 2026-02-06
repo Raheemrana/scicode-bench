@@ -47253,15 +47253,21 @@ self.onmessage = function (e) {
         const response = await fetch(`${url}`, {
           headers: { Range: `bytes=${start}-${end}` }
         });
-        // If the server returned a full 200 with the whole file, still handle it by
-        // slicing out the requested range from the returned bytes.
+        // Some servers or caches may respond with non-2xx (e.g. 304) and an empty body.
+        // In that case, fallback to fetching the full file and slicing locally.
+        if (response.status !== 200 && response.status !== 206) {
+          // Fallback path
+          const fullResp = await fetch(`${url}`);
+          const fullBuf = await fullResp.arrayBuffer();
+          const fullUint8 = new Uint8Array(fullBuf);
+          return fullUint8.subarray(start, end + 1);
+        }
         const arrayBuffer = await response.arrayBuffer();
         const uint8 = new Uint8Array(arrayBuffer);
         if (response.status === 200) {
           return uint8.subarray(start, end + 1);
         }
-        // For 206 Partial Content or other success responses, return the body as-is
-        return new Uint8Array(arrayBuffer);
+        return uint8;
       } catch (err) {
         // Common failure: CORS preflight blocked Range header. Fallback to fetching
         // the entire file without Range and slice the requested bytes locally.
